@@ -24,11 +24,10 @@ typedef struct
     char *command;
     int repeat_count;
     long timeout_secs;
-    char *args[MAX_COMMAND_ARGS]; // 用于存储命令参数的数组
+    char *args[MAX_COMMAND_ARGS];
     int args_count;
     int until_success;
 } CommandSpec;
-
 
 void print_help();
 // 解析带单位的时间字符串为秒数
@@ -74,9 +73,9 @@ CommandSpec parse_args(int argc, char *argv[])
 
     for (int i = 1; i < argc; ++i)
     {
-        if (strcmp(argv[i], "-?")== 0 || strcmp(argv[i], "-h")==0 )
+        if (strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "-h") == 0)
         {
-            show_help=1;
+            show_help = 1;
             return spec;
         }
         else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--timeout") == 0)
@@ -138,10 +137,9 @@ CommandSpec parse_args(int argc, char *argv[])
     return spec;
 }
 
-// 超时信号处理器（需要根据实际情况补充实现）
+// 超时信号处理器
 void handle_timeout(int signum)
 {
-    // 在这里执行超时后的清理工作，比如打印错误信息，然后退出进程
     fprintf(stderr, "Command timed out\n");
     exit(EXIT_FAILURE);
 }
@@ -152,39 +150,42 @@ int main(int argc, char *argv[])
 
     CommandSpec cmd_spec = parse_args(argc, argv);
     long cmd_repeated = 0;
-    
+
     // 构建完整命令参数数组
     char *full_cmd[MAX_COMMAND_ARGS + 2];
 
-    if(show_help==1) {
+    if (show_help == 1)
+    {
         print_help();
         exit(0);
-    }    
+    }
     full_cmd[0] = cmd_spec.command;
     memcpy(&full_cmd[1], cmd_spec.args, sizeof(char *) * cmd_spec.args_count);
     full_cmd[cmd_spec.args_count + 1] = NULL;
-    
+
     // 重复执行命令
     while (1)
     {
         pid_t pid = fork();
         if (pid == -1)
         {
-            perror("fork");
+            perror("execute cmd failed on fork subprocess");
             exit(EXIT_FAILURE);
         }
         else if (pid == 0)
         {                                    // 子进程
-            signal(SIGALRM, handle_timeout); // 设置超时信号处理器（未给出handle_timeout函数实现）
+            signal(SIGALRM, handle_timeout); // 设置超时信号处理器
 
-            // 如果指定了超时时间
+            // 设置超时时间
             if (cmd_spec.timeout_secs > 0)
             {
-                alarm(cmd_spec.timeout_secs); // 设置超时时间
+                alarm(cmd_spec.timeout_secs);
             }
 
-            execvp(cmd_spec.command, full_cmd); // 执行命令
-            perror("execvp");                   // 如果execvp失败，会在这里打印错误并退出
+            if (execvp(cmd_spec.command, full_cmd) == -1)
+            {
+                perror("execute cmd failed on execvp");
+            }
             exit(EXIT_FAILURE);
         }
         else
@@ -192,20 +193,20 @@ int main(int argc, char *argv[])
             int status;
             waitpid(pid, &status, 0); // 等待子进程结束
             cmd_repeated++;
-            // 检查子进程结束状态
+
             if (WIFEXITED(status))
             {
                 // 子进程正常退出
-                perror("cmd exit");
                 if (cmd_spec.until_success == 1)
                 {
                     break;
                 }
+                printf("cmd: %s execute success, round: %ld\n", cmd_spec.command, cmd_repeated);
             }
             else if (WIFSIGNALED(status))
             {
                 // 子进程因信号而结束
-                perror("cmd exit by error");
+                fprintf(stderr, "cmd: %s execute failed\n", cmd_spec.command);
                 if (cmd_spec.until_success == 1)
                 {
                     continue;
@@ -216,9 +217,6 @@ int main(int argc, char *argv[])
                 break;
             }
         }
-    }
-    for (int i = 0; i < cmd_spec.repeat_count; ++i)
-    {
     }
     return 0;
 }
@@ -257,6 +255,4 @@ void print_help()
             "\n"
             "each with a maximum execution time of 10 seconds."
             "\n");
-
-    // 如果有其他选项或特性，也可以在此处添加相应的帮助信息
 }
