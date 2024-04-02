@@ -13,21 +13,30 @@ redo命令行工具
 #include <errno.h>
 
 #define MAX_COMMAND_ARGS 32
-#define MAX_COMMAND_LENGTH 1024
+#define MAX_COMMAND_ARG_LEN 20
 #define DEFAULT_TIMEOUT 0
 #define DEFAULT_REPEAT 1
 
 static int show_help = 0;
 
-typedef struct
+
+typedef struct 
 {
     char *command;
+    char *args[MAX_COMMAND_ARGS];
+    int arg_count;
+}Command;
+
+typedef struct
+{
+    Command **cmds;
+    int cmd_count;
     int repeat_count;
     long timeout_secs;
-    char *args[MAX_COMMAND_ARGS];
-    int args_count;
     int until_success;
-} CommandSpec;
+} ExecCommand;
+
+
 
 void print_help();
 // 解析带单位的时间字符串为秒数
@@ -65,25 +74,27 @@ long parse_time_with_units(const char *time_str)
 }
 
 // 解析命令行参数
-CommandSpec parse_args(int argc, char *argv[])
+ExecCommand parse_args(int argc, char *argv[])
 {
-    CommandSpec spec = {.command = NULL, .repeat_count = DEFAULT_REPEAT, .timeout_secs = DEFAULT_TIMEOUT};
-    spec.args_count = 0;
-    spec.until_success = 0;
-
-    for (int i = 1; i < argc; ++i)
+    ExecCommand ex_cmd = {.repeat_count = DEFAULT_REPEAT, .timeout_secs = DEFAULT_TIMEOUT};
+    Command *cur_cmd;
+    ex_cmd.until_success = 0;
+    ex_cmd.cmds = (Command**)malloc(sizeof(Command*));
+    cur_cmd = (Command*)malloc(sizeof(Command));
+    cur_cmd->command = NULL;
+    for (int i = 0; i < argc; ++i)
     {
         if (strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "-h") == 0)
         {
             show_help = 1;
-            return spec;
+            return ex_cmd;
         }
         else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--timeout") == 0)
         {
             if (++i < argc && *(argv[i]) != '-')
             {
                 // 添加对单位的解析
-                spec.timeout_secs = parse_time_with_units(argv[i]);
+                ex_cmd.timeout_secs = parse_time_with_units(argv[i]);
                 continue;
             }
             else
@@ -96,7 +107,7 @@ CommandSpec parse_args(int argc, char *argv[])
         {
             if (++i < argc && *(argv[i]) != '-')
             {
-                spec.repeat_count = strtol(argv[i], NULL, 10);
+                ex_cmd.repeat_count = strtol(argv[i], NULL, 10);
                 continue;
             }
             else
@@ -107,18 +118,22 @@ CommandSpec parse_args(int argc, char *argv[])
         }
         else if (strcmp(argv[i], "-u") == 0)
         {
-            spec.until_success = 1;
+            ex_cmd.until_success = 1;
         }
-        else if (spec.command == NULL)
+        else if (strcmp(argv[i], "|") == 0)
         {
-            spec.command = argv[i];
+            ex_cmd.cmds[ex_cmd.cmd_count++] = cur_cmd;
+            cur_cmd = (Command*)malloc(sizeof(Command));
+            cur_cmd->command = NULL;
             continue;
         }
-        else
+        else if (cur_cmd->command == NULL) {
+            cur_cmd->command = argv[i];
+        }else
         {
-            if (spec.args_count < MAX_COMMAND_ARGS)
+            if (cur_cmd->arg_count < MAX_COMMAND_ARGS)
             {
-                spec.args[spec.args_count++] = argv[i];
+                cur_cmd->args[cur_cmd->arg_count++] = argv[i];
             }
             else
             {
@@ -127,14 +142,8 @@ CommandSpec parse_args(int argc, char *argv[])
             }
         }
     }
-
-    if (spec.command == NULL)
-    {
-        fprintf(stderr, "No command provided\n");
-        exit(EXIT_FAILURE);
-    }
-
-    return spec;
+    ex_cmd.cmds[ex_cmd.cmd_count++] = cur_cmd;
+    return ex_cmd;
 }
 
 // 超时信号处理器
@@ -144,24 +153,60 @@ void handle_timeout(int signum)
     exit(EXIT_FAILURE);
 }
 
-// 示例主函数，调用参数解析函数并执行命令
-int main(int argc, char *argv[])
+int input_cmd(char *cmd_strs[], int *cmd_strs_len)
 {
+    char input_cmd[MAX_COMMAND_ARGS * MAX_COMMAND_ARG_LEN];
+    int wind_start, wind_end, cmd_len, cmd_index;
 
-    CommandSpec cmd_spec = parse_args(argc, argv);
-    long cmd_repeated = 0;
-
-    // 构建完整命令参数数组
-    char *full_cmd[MAX_COMMAND_ARGS + 2];
-
-    if (show_help == 1)
+    fgets(input_cmd, MAX_COMMAND_ARGS * MAX_COMMAND_ARG_LEN, stdin);
+    // remove \n
+    input_cmd[strcspn(input_cmd, "\n")] = '\0';
+    cmd_len = strlen(input_cmd);
+    wind_start = 0;
+    wind_end = 0;
+    cmd_index = 0;
+    while (wind_end < cmd_len && cmd_index < *cmd_strs_len)
     {
-        print_help();
-        exit(0);
+        char *cur_arg;
+        if (input_cmd[wind_end] == ' ' && wind_end - wind_start > 0)
+        {
+            if (strncmp((const char*)(input_cmd + wind_start), "quit", 4) == 0)
+            {
+                return 0;
+            }
+            cur_arg = (char *)malloc(sizeof(char) * (wind_end - wind_start + 1));
+            if (cur_arg == NULL)
+            {
+                perror("cannot malloc men for store args\n");
+                return 0;
+            }
+            memcpy(cur_arg, input_cmd + wind_start, (wind_end - wind_start));
+            cur_arg[wind_end - wind_start + 1] = '\n';
+            cmd_strs[cmd_index++] = cur_arg;
+        }
+        else if (input_cmd[wind_end] != ' ')
+        {
+            wind_end++;
+            continue;
+        }
+        wind_end++;
+        wind_start = wind_end;
     }
-    full_cmd[0] = cmd_spec.command;
-    memcpy(&full_cmd[1], cmd_spec.args, sizeof(char *) * cmd_spec.args_count);
-    full_cmd[cmd_spec.args_count + 1] = NULL;
+    if (cmd_index == 0)
+    {
+        return 0;
+    }
+    *cmd_strs_len = cmd_index;
+    return 1;
+}
+
+void exec_inline_cmd(ExecCommand exec_cmd)
+{
+    long cmd_repeated = 0;
+    char *full_cmd[MAX_COMMAND_ARGS + 2];
+    full_cmd[0] = exec_cmd.cmds[0]->command;
+    memcpy(&full_cmd[1], exec_cmd.cmds[0]->args, sizeof(char *) *  exec_cmd.cmds[0]->arg_count);
+    full_cmd[exec_cmd.cmds[0]->arg_count + 1] = NULL;
 
     // 重复执行命令
     while (1)
@@ -177,12 +222,12 @@ int main(int argc, char *argv[])
             signal(SIGALRM, handle_timeout); // 设置超时信号处理器
 
             // 设置超时时间
-            if (cmd_spec.timeout_secs > 0)
+            if (exec_cmd.timeout_secs > 0)
             {
-                alarm(cmd_spec.timeout_secs);
+                alarm(exec_cmd.timeout_secs);
             }
 
-            if (execvp(cmd_spec.command, full_cmd) == -1)
+            if (execvp(exec_cmd.cmds[0]->command, full_cmd) == -1)
             {
                 perror("execute cmd failed on execvp");
             }
@@ -197,26 +242,61 @@ int main(int argc, char *argv[])
             if (WIFEXITED(status))
             {
                 // 子进程正常退出
-                if (cmd_spec.until_success == 1)
+                if (exec_cmd.until_success == 1)
                 {
                     break;
                 }
-                printf("cmd: %s execute success, round: %ld\n", cmd_spec.command, cmd_repeated);
+                printf("cmd: %s execute success, round: %ld\n",  exec_cmd.cmds[0]->command, cmd_repeated);
             }
             else if (WIFSIGNALED(status))
             {
                 // 子进程因信号而结束
-                fprintf(stderr, "cmd: %s execute failed\n", cmd_spec.command);
-                if (cmd_spec.until_success == 1)
+                fprintf(stderr, "cmd: %s execute failed\n", exec_cmd.cmds[0]->command);
+                if (exec_cmd.until_success == 1)
                 {
                     continue;
                 }
             }
-            if (cmd_spec.repeat_count > 0 && cmd_repeated == cmd_spec.repeat_count)
+            if (exec_cmd.repeat_count > 0 && cmd_repeated == exec_cmd.repeat_count)
             {
                 break;
             }
         }
+    }
+}
+
+void exec_multi_cmds(ExecCommand cmd_spec)
+{
+    
+}
+
+// 示例主函数，调用参数解析函数并执行命令
+int main(int argc, char *argv[])
+{
+    ExecCommand cmd_spec;
+    char *cmd_strs[MAX_COMMAND_ARGS];
+    int cmd_strs_len;
+
+    cmd_strs_len = MAX_COMMAND_ARGS;
+    if (argc == 1 && input_cmd(cmd_strs, &cmd_strs_len) != 1)
+    {
+        return 0;
+    }
+
+    if (argc > 1)
+    {
+        cmd_spec = parse_args(argc-1, argv+1);
+        if (show_help == 1)
+        {
+            print_help();
+            exit(0);
+        }
+        exec_inline_cmd(cmd_spec);
+    }
+    else
+    {   
+        cmd_spec = parse_args(cmd_strs_len, cmd_strs);
+        exec_multi_cmds(cmd_spec);
     }
     return 0;
 }
