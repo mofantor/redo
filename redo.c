@@ -1,7 +1,5 @@
 /*
-redo命令行工具
-重复执行某一个具体的命令，知道命令执行成功或者达到退出条件。
-
+Redo: A Command-Line Utility for Repeating Executions
 */
 
 #include <stdio.h>
@@ -19,13 +17,12 @@ redo命令行工具
 
 static int show_help = 0;
 
-
-typedef struct 
+typedef struct
 {
     char *command;
     char *args[MAX_COMMAND_ARGS];
     int arg_count;
-}Command;
+} Command;
 
 typedef struct
 {
@@ -36,10 +33,42 @@ typedef struct
     int until_success;
 } ExecCommand;
 
+void print_help()
+{
+    fprintf(stderr,
+            "Usage: redo [OPTIONS] COMMAND [ARGS...]"
+            "\n"
+            "\n"
+            "Redo command-line utility to repeatedly execute a specific command."
+            "\n"
+            "\n"
+            "Options:"
+            "\n"
+            "  -?, -h          : Show this help message and exit."
+            "\n"
+            "  -v              : Show program's version information and exit."
+            "\n"
+            "  -e, --timeout N : Set a timeout for each command execution in seconds."
+            "\n"
+            "                    Optionally, append 's', 'm', or 'h' for seconds, minutes, or hours."
+            "\n"
+            "                    Example: -e 10s or -e 5m or -e 1h"
+            "\n"
+            "  -r, --repeat N  : Repeat the command N times."
+            "\n"
+            "  -u              : Repeat the command until it succeeds (exit code 0)."
+            "\n"
+            "\n"
+            "Example:"
+            "\n"
+            "  redo -r 5 -e 10s ping google.com"
+            "\n"
+            "This will execute the command 'ping google.com' five times,"
+            "\n"
+            "each with a maximum execution time of 10 seconds."
+            "\n");
+}
 
-
-void print_help();
-// 解析带单位的时间字符串为秒数
 long parse_time_with_units(const char *time_str)
 {
     long duration = 0;
@@ -48,10 +77,14 @@ long parse_time_with_units(const char *time_str)
 
     errno = 0;
     long raw_duration = strtol(time_str, &endptr, 10);
-    if (errno != 0 || endptr == time_str || *endptr != unit)
+    if (errno != 0 || endptr == time_str)
     {
         fprintf(stderr, "Invalid time format. Expected <number><unit> where unit is s/m/h\n");
         exit(EXIT_FAILURE);
+    }
+    if (*endptr != unit)
+    {
+        unit = 's';
     }
 
     switch (unit)
@@ -73,14 +106,13 @@ long parse_time_with_units(const char *time_str)
     return duration;
 }
 
-// 解析命令行参数
 ExecCommand parse_args(int argc, char *argv[])
 {
     ExecCommand ex_cmd = {.repeat_count = DEFAULT_REPEAT, .timeout_secs = DEFAULT_TIMEOUT};
     Command *cur_cmd;
     ex_cmd.until_success = 0;
-    ex_cmd.cmds = (Command**)malloc(sizeof(Command*));
-    cur_cmd = (Command*)malloc(sizeof(Command));
+    ex_cmd.cmds = (Command **)malloc(sizeof(Command *));
+    cur_cmd = (Command *)malloc(sizeof(Command));
     cur_cmd->command = NULL;
     for (int i = 0; i < argc; ++i)
     {
@@ -123,13 +155,16 @@ ExecCommand parse_args(int argc, char *argv[])
         else if (strcmp(argv[i], "|") == 0)
         {
             ex_cmd.cmds[ex_cmd.cmd_count++] = cur_cmd;
-            cur_cmd = (Command*)malloc(sizeof(Command));
+            cur_cmd = (Command *)malloc(sizeof(Command));
             cur_cmd->command = NULL;
             continue;
         }
-        else if (cur_cmd->command == NULL) {
+        else if (cur_cmd->command == NULL)
+        {
             cur_cmd->command = argv[i];
-        }else
+            cur_cmd->args[cur_cmd->arg_count++] = argv[i];
+        }
+        else
         {
             if (cur_cmd->arg_count < MAX_COMMAND_ARGS)
             {
@@ -146,7 +181,6 @@ ExecCommand parse_args(int argc, char *argv[])
     return ex_cmd;
 }
 
-// 超时信号处理器
 void handle_timeout(int signum)
 {
     fprintf(stderr, "Command timed out\n");
@@ -165,12 +199,12 @@ int input_cmd(char *cmd_strs[], int *cmd_strs_len)
     wind_start = 0;
     wind_end = 0;
     cmd_index = 0;
-    while (wind_end < cmd_len && cmd_index < *cmd_strs_len)
+    while (wind_end <= cmd_len && cmd_index < *cmd_strs_len)
     {
         char *cur_arg;
-        if (input_cmd[wind_end] == ' ' && wind_end - wind_start > 0)
+        if (wind_end == cmd_len || (input_cmd[wind_end] == ' ' && wind_end - wind_start > 0))
         {
-            if (strncmp((const char*)(input_cmd + wind_start), "quit", 4) == 0)
+            if (strncmp((const char *)(input_cmd + wind_start), "quit", 4) == 0)
             {
                 return 0;
             }
@@ -200,82 +234,93 @@ int input_cmd(char *cmd_strs[], int *cmd_strs_len)
     return 1;
 }
 
-void exec_inline_cmd(ExecCommand exec_cmd)
+int exec_multi_cmds(ExecCommand cmd_spec)
 {
-    long cmd_repeated = 0;
-    char *full_cmd[MAX_COMMAND_ARGS + 2];
-    full_cmd[0] = exec_cmd.cmds[0]->command;
-    memcpy(&full_cmd[1], exec_cmd.cmds[0]->args, sizeof(char *) *  exec_cmd.cmds[0]->arg_count);
-    full_cmd[exec_cmd.cmds[0]->arg_count + 1] = NULL;
-
-    // 重复执行命令
-    while (1)
+    if (cmd_spec.cmd_count < 1)
     {
-        pid_t pid = fork();
-        if (pid == -1)
+        printf("input cmd should at least  1\n");
+        return -1;
+    }
+
+    pid_t *pids = (pid_t *)calloc(cmd_spec.cmd_count, sizeof(pid_t));
+
+    /* output fd of the previous process, initialized to
+     * the stdout fd the parent process pointed to
+     */
+    int previous_out_fd = dup(STDIN_FILENO);
+    /* we should not close STDIN here otherwise the child will close it again */
+
+    int fds[2];
+    for (int i = 0; i < cmd_spec.cmd_count; i++)
+    {
+        if (pipe(fds) == -1)
         {
-            perror("execute cmd failed on fork subprocess");
-            exit(EXIT_FAILURE);
+            perror("pipe create error");
+            return errno;
         }
-        else if (pid == 0)
-        {                                    // 子进程
-            signal(SIGALRM, handle_timeout); // 设置超时信号处理器
-
-            // 设置超时时间
-            if (exec_cmd.timeout_secs > 0)
-            {
-                alarm(exec_cmd.timeout_secs);
-            }
-
-            if (execvp(exec_cmd.cmds[0]->command, full_cmd) == -1)
-            {
-                perror("execute cmd failed on execvp");
-            }
-            exit(EXIT_FAILURE);
+        int ret = fork();
+        if (ret < 0)
+        {
+            perror("fork error");
+            return errno;
         }
-        else
-        { // 父进程
-            int status;
-            waitpid(pid, &status, 0); // 等待子进程结束
-            cmd_repeated++;
+        else if (ret == 0) // child
+        {
+            pids[i] = getpid();
 
-            if (WIFEXITED(status))
+            /* assign the previous process's output fd to the stdin of the child process */
+            dup2(previous_out_fd, STDIN_FILENO);
+            close(previous_out_fd);
+
+            close(fds[0]); // close read end
+
+            /* if it is not the last process, assgin stdout of the child process
+             * to the write end of the pipe, which connects the next child process.
+             */
+            if (i != cmd_spec.cmd_count - 1)
+                dup2(fds[1], STDOUT_FILENO);
+
+            close(fds[1]); // close write end
+            if (cmd_spec.timeout_secs > 0)
             {
-                // 子进程正常退出
-                if (exec_cmd.until_success == 1)
-                {
-                    break;
-                }
-                printf("cmd: %s execute success, round: %ld\n",  exec_cmd.cmds[0]->command, cmd_repeated);
+                signal(SIGALRM, handle_timeout);
+                alarm(cmd_spec.timeout_secs);
             }
-            else if (WIFSIGNALED(status))
+            if (execvp(cmd_spec.cmds[i]->command, cmd_spec.cmds[i]->args) == -1)
             {
-                // 子进程因信号而结束
-                fprintf(stderr, "cmd: %s execute failed\n", exec_cmd.cmds[0]->command);
-                if (exec_cmd.until_success == 1)
-                {
-                    continue;
-                }
+                fprintf(stderr, "pipe: %s: %s\n", cmd_spec.cmds[i]->command, strerror(errno));
+                return errno;
             }
-            if (exec_cmd.repeat_count > 0 && cmd_repeated == exec_cmd.repeat_count)
-            {
-                break;
-            }
+            return 0;
+        }
+        else // parent
+        {
+            /* save the read end, which is the input of the next process */
+            previous_out_fd = fds[0];
+
+            close(fds[1]); // close write end
+
+            /* we should'nt close the read end's fd before the child duplicated it */
         }
     }
+
+    int status;
+    for (int i = 0; i < cmd_spec.cmd_count; i++)
+    {
+        waitpid(pids[i], &status, 0);
+        int ret = WEXITSTATUS(status);
+        if (ret != 0)
+            return ret;
+    }
+    return 0;
 }
 
-void exec_multi_cmds(ExecCommand cmd_spec)
-{
-    
-}
-
-// 示例主函数，调用参数解析函数并执行命令
 int main(int argc, char *argv[])
 {
     ExecCommand cmd_spec;
     char *cmd_strs[MAX_COMMAND_ARGS];
     int cmd_strs_len;
+    int ret;
 
     cmd_strs_len = MAX_COMMAND_ARGS;
     if (argc == 1 && input_cmd(cmd_strs, &cmd_strs_len) != 1)
@@ -285,54 +330,36 @@ int main(int argc, char *argv[])
 
     if (argc > 1)
     {
-        cmd_spec = parse_args(argc-1, argv+1);
-        if (show_help == 1)
-        {
-            print_help();
-            exit(0);
-        }
-        exec_inline_cmd(cmd_spec);
+        cmd_spec = parse_args(argc - 1, argv + 1);
     }
     else
-    {   
+    {
         cmd_spec = parse_args(cmd_strs_len, cmd_strs);
-        exec_multi_cmds(cmd_spec);
+    }
+    if (show_help == 1)
+    {
+        print_help();
+    }
+    else
+    {
+        long cmd_round = 0;
+        while (1)
+        {
+            ret = exec_multi_cmds(cmd_spec);
+            if (cmd_spec.until_success == 1)
+            {
+                if (ret == 0)
+                    break;
+            }
+            else
+            {
+                cmd_round++;
+                if (cmd_round >= cmd_spec.repeat_count)
+                {
+                    break;
+                }
+            }
+        }
     }
     return 0;
-}
-
-void print_help()
-{
-    fprintf(stderr,
-            "Usage: redo [OPTIONS] COMMAND [ARGS...]"
-            "\n"
-            "\n"
-            "Redo command-line utility to repeatedly execute a specific command."
-            "\n"
-            "\n"
-            "Options:"
-            "\n"
-            "  -?, -h          : Show this help message and exit."
-            "\n"
-            "  -v              : Show program's version information and exit."
-            "\n"
-            "  -e, --timeout N : Set a timeout for each command execution in seconds."
-            "\n"
-            "                    Optionally, append 's', 'm', or 'h' for seconds, minutes, or hours."
-            "\n"
-            "                    Example: -e 10s or -e 5m or -e 1h"
-            "\n"
-            "  -r, --repeat N  : Repeat the command N times."
-            "\n"
-            "  -u              : Repeat the command until it succeeds (exit code 0)."
-            "\n"
-            "\n"
-            "Example:"
-            "\n"
-            "  redo -r 5 -e 10s ping google.com"
-            "\n"
-            "This will execute the command 'ping google.com' five times,"
-            "\n"
-            "each with a maximum execution time of 10 seconds."
-            "\n");
 }
