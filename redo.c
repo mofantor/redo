@@ -14,8 +14,10 @@ Redo: A Command-Line Utility for Repeating Executions
 #define MAX_COMMAND_ARG_LEN 20
 #define DEFAULT_TIMEOUT 0
 #define DEFAULT_REPEAT 1
+#define MAX_SUBSTRINGS 32
 
 static int show_help = 0;
+static char *PIPE_ARG = "|";
 
 typedef struct
 {
@@ -106,78 +108,238 @@ long parse_time_with_units(const char *time_str)
     return duration;
 }
 
+int parse_program_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
+{
+    if (*cur_want == 0)
+    {
+        if (strcmp(arg, "-?") == 0 || strcmp(arg, "-h") == 0)
+        {
+            show_help = 1;
+        }
+        else if (strcmp(arg, "-u") == 0)
+        {
+            ex_cmd->until_success = 1;
+        }
+        else if (strcmp(arg, "-e") == 0 || strcmp(arg, "--timeout") == 0)
+        {
+            *cur_want = 1;
+        }
+        else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--repeat") == 0)
+        {
+            *cur_want = 2;
+        }
+        else
+        {
+            return 0;
+        }
+    }
+    else if (*cur_want == 1)
+    {
+        ex_cmd->timeout_secs = parse_time_with_units(arg);
+        *cur_want = 0;
+    }
+    else if (*cur_want == 2)
+    {
+        char *endptr;
+        errno = 0;
+        ex_cmd->repeat_count = strtol(arg, &endptr, 10);
+        if (errno != 0 || endptr == arg)
+        {
+            fprintf(stderr, "Invalid time format. Expected <number><unit> where unit is s/m/h\n");
+            exit(EXIT_FAILURE);
+        }
+        *cur_want = 0;
+    }
+    else
+    {
+        return 0;
+    }
+    return 1;
+}
+
+int parse_cmd_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
+{
+    Command *cur_cmd;
+    cur_cmd = ex_cmd->cmds[ex_cmd->cmd_count];
+
+    if (cur_cmd->command == NULL)
+    {
+        cur_cmd->command = arg;
+        cur_cmd->args[cur_cmd->arg_count++] = arg;
+        return 1;
+    }
+    else
+    {
+        if (cur_cmd->arg_count < MAX_COMMAND_ARGS)
+        {
+            cur_cmd->args[cur_cmd->arg_count++] = arg;
+        }
+        else
+        {
+            fprintf(stderr, "Too many command arguments.\n");
+            exit(EXIT_FAILURE);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int exist_pipe_char(const char *str)
+{
+    size_t i;
+    size_t len = strlen(str);
+    for (i = 0; i < len; i++)
+    {
+        if (str[i] == '|')
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int exist_space_char(const char *str)
+{
+    size_t i;
+    size_t len = strlen(str);
+    for (i = 0; i < len; i++)
+    {
+        if (str[i] == ' ')
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
+char **get_argv_by_split(const char *input)
+{
+
+    size_t wind_start, wind_end, input_len;
+    char **argv;
+    int cur_argc;
+    char *cur_arg;
+    size_t t_len;
+
+    wind_start = 0;
+    wind_end = 0;
+    input_len = strlen(input);
+    argv = (char **)malloc(sizeof(char *) * MAX_COMMAND_ARGS);
+    cur_argc = 0;
+    while (wind_end <= input_len)
+    {
+        if (input[wind_end] == ' ' || wind_end == input_len)
+        {
+            t_len = wind_end - wind_start;
+            if (t_len == 0)
+            {
+                wind_end++;
+                wind_start++;
+                continue;
+            }
+            cur_arg = (char *)malloc(sizeof(char) * (t_len + 1));
+            memcpy(cur_arg, input + wind_start, t_len);
+            cur_arg[t_len] = '\0';
+            argv[cur_argc++] = cur_arg;
+            wind_start = ++wind_end;
+        }
+        else if (input[wind_end] == '|')
+        {
+            t_len = wind_end - wind_start;
+            if (t_len > 0)
+            {
+                // add new arg
+                cur_arg = (char *)malloc(sizeof(char) * (t_len + 1));
+                memcpy(cur_arg, input + wind_start, t_len);
+                cur_arg[t_len] = '\0';
+                argv[cur_argc++] = cur_arg;
+            }
+            // add pipe arg
+            argv[cur_argc++] = PIPE_ARG;
+            wind_start = ++wind_end;
+        }
+        else
+        {
+            wind_end++;
+        }
+    }
+    if (cur_argc == 0)
+    {
+        free(argv);
+        return NULL;
+    }
+    argv[cur_argc] = NULL;
+    return argv;
+}
+
 ExecCommand parse_args(int argc, char *argv[])
 {
-    ExecCommand ex_cmd = {.repeat_count = DEFAULT_REPEAT, .timeout_secs = DEFAULT_TIMEOUT};
+    ExecCommand ex_cmd = {.repeat_count = DEFAULT_REPEAT, .timeout_secs = DEFAULT_TIMEOUT, .cmd_count = 0};
     Command *cur_cmd;
+    char **all_argv, **t_argv;
+    int want_next = 0;
+    int i;
+    int all_argc, t_argc;
+    size_t arg_len = 0;
     ex_cmd.until_success = 0;
     ex_cmd.cmds = (Command **)malloc(sizeof(Command *));
     cur_cmd = (Command *)malloc(sizeof(Command));
     cur_cmd->command = NULL;
-    for (int i = 0; i < argc; ++i)
+    ex_cmd.cmds[ex_cmd.cmd_count] = cur_cmd;
+
+    all_argv = (char **)malloc(sizeof(char *) * MAX_COMMAND_ARGS);
+    all_argc = 0;
+    t_argv = NULL;
+    for (i = 0; i < argc; ++i)
     {
-        if (strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "-h") == 0)
+        arg_len = strlen(argv[i]);
+        if (arg_len > 0)
         {
-            show_help = 1;
-            return ex_cmd;
-        }
-        else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--timeout") == 0)
-        {
-            if (++i < argc && *(argv[i]) != '-')
+            if (*argv[i] == '"' && *(argv[i] + arg_len - 1) == '"')
             {
-                // 添加对单位的解析
-                ex_cmd.timeout_secs = parse_time_with_units(argv[i]);
-                continue;
+                argv[i][arg_len - 1] = '\0';
+                t_argv = get_argv_by_split(argv[i] + 1);
+            }
+            else if (exist_pipe_char(argv[i]) == 1)
+            {
+                t_argv = get_argv_by_split(argv[i]);
+            }
+            else if (exist_space_char(argv[i]) == 1)
+            {
+                t_argv = get_argv_by_split(argv[i]);
             }
             else
             {
-                fprintf(stderr, "Timeout value missing after -e/--timeout\n");
-                exit(EXIT_FAILURE);
+                all_argv[all_argc++] = argv[i];
             }
-        }
-        else if (strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "--repeat") == 0)
-        {
-            if (++i < argc && *(argv[i]) != '-')
+            t_argc = 0;
+            while (t_argv != NULL && t_argc < MAX_COMMAND_ARGS && t_argv[t_argc] != NULL)
             {
-                ex_cmd.repeat_count = strtol(argv[i], NULL, 10);
-                continue;
+                all_argv[all_argc++] = t_argv[t_argc++];
             }
-            else
-            {
-                fprintf(stderr, "Repeat count missing after -r/--repeat\n");
-                exit(EXIT_FAILURE);
-            }
+            t_argv = NULL;
         }
-        else if (strcmp(argv[i], "-u") == 0)
+    }
+    for (i = 0; i < all_argc; ++i)
+    {
+        arg_len = strlen(all_argv[i]);
+        if (*all_argv[i] == '|')
         {
-            ex_cmd.until_success = 1;
-        }
-        else if (strcmp(argv[i], "|") == 0)
-        {
-            ex_cmd.cmds[ex_cmd.cmd_count++] = cur_cmd;
             cur_cmd = (Command *)malloc(sizeof(Command));
             cur_cmd->command = NULL;
-            continue;
-        }
-        else if (cur_cmd->command == NULL)
-        {
-            cur_cmd->command = argv[i];
-            cur_cmd->args[cur_cmd->arg_count++] = argv[i];
+            ex_cmd.cmds[++ex_cmd.cmd_count] = cur_cmd;
         }
         else
         {
-            if (cur_cmd->arg_count < MAX_COMMAND_ARGS)
+            if (parse_program_arg(all_argv[i], &ex_cmd, &want_next) == 1)
             {
-                cur_cmd->args[cur_cmd->arg_count++] = argv[i];
+                continue;
             }
-            else
-            {
-                fprintf(stderr, "Too many command arguments.\n");
-                exit(EXIT_FAILURE);
-            }
+            // TODO if not get
+            parse_cmd_arg(all_argv[i], &ex_cmd, &want_next);
         }
     }
-    ex_cmd.cmds[ex_cmd.cmd_count++] = cur_cmd;
     return ex_cmd;
 }
 
@@ -236,13 +398,13 @@ int input_cmd(char *cmd_strs[], int *cmd_strs_len)
 
 int exec_multi_cmds(ExecCommand cmd_spec)
 {
-    if (cmd_spec.cmd_count < 1)
+    if (cmd_spec.cmd_count == 0 && cmd_spec.cmds[0]->command == NULL)
     {
         printf("input cmd should at least  1\n");
         return -1;
     }
 
-    pid_t *pids = (pid_t *)calloc(cmd_spec.cmd_count, sizeof(pid_t));
+    pid_t *pids = (pid_t *)calloc(cmd_spec.cmd_count + 1, sizeof(pid_t));
 
     /* output fd of the previous process, initialized to
      * the stdout fd the parent process pointed to
@@ -251,7 +413,7 @@ int exec_multi_cmds(ExecCommand cmd_spec)
     /* we should not close STDIN here otherwise the child will close it again */
 
     int fds[2];
-    for (int i = 0; i < cmd_spec.cmd_count; i++)
+    for (int i = 0; i <= cmd_spec.cmd_count; i++)
     {
         if (pipe(fds) == -1)
         {
@@ -277,7 +439,7 @@ int exec_multi_cmds(ExecCommand cmd_spec)
             /* if it is not the last process, assgin stdout of the child process
              * to the write end of the pipe, which connects the next child process.
              */
-            if (i != cmd_spec.cmd_count - 1)
+            if (i != cmd_spec.cmd_count)
                 dup2(fds[1], STDOUT_FILENO);
 
             close(fds[1]); // close write end
@@ -305,7 +467,7 @@ int exec_multi_cmds(ExecCommand cmd_spec)
     }
 
     int status;
-    for (int i = 0; i < cmd_spec.cmd_count; i++)
+    for (int i = 0; i <= cmd_spec.cmd_count; i++)
     {
         waitpid(pids[i], &status, 0);
         int ret = WEXITSTATUS(status);
