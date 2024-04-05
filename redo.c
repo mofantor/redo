@@ -61,14 +61,22 @@ void print_help()
             "  -u              : Repeat the command until it succeeds (exit code 0)."
             "\n"
             "\n"
-            "Example:"
+            "Example 1:"
             "\n"
             "  redo -r 5 -e 10s ping google.com"
             "\n"
             "This will execute the command 'ping google.com' five times,"
             "\n"
             "each with a maximum execution time of 10 seconds."
-            "\n");
+            "\n"
+            "\n"
+            "Example 2:"
+            "\n"
+            "  redo \"ps aux | grep redo\""
+            "\n"
+            "This will execute the command 'ps aux | grep redo'"
+            "\n"
+            );
 }
 
 long parse_time_with_units(const char *time_str)

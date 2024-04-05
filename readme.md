@@ -12,6 +12,10 @@ redo -r 5 -e 10s ping google.com
 ```
 This command would execute ping google.com five times, with a maximum execution time of 10 seconds per attempt.
 
+```Bash
+redo "ps aux | grep redo"
+```
+This will execute the command 'ps aux | grep redo'
 ## Installation
 ```Bash
 git clone https://github.com/yourusername/redo.git
