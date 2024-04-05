@@ -343,7 +343,7 @@ ExecCommand parse_args(int argc, char *argv[])
     return ex_cmd;
 }
 
-void handle_timeout(int signum)
+void handle_timeout()
 {
     fprintf(stderr, "[redo]Command timed out\n");
     exit(EXIT_FAILURE);
@@ -451,9 +451,8 @@ int exec_multi_cmds(ExecCommand cmd_spec)
             if (execvp(cmd_spec.cmds[i]->command, cmd_spec.cmds[i]->args) == -1)
             {
                 fprintf(stderr, "[redo]exec cmd :'%s' failed,  %s\n", cmd_spec.cmds[i]->command, strerror(errno));
-                return errno;
             }
-            return 0;
+            exit(EXIT_FAILURE);
         }
         else // parent
         {
@@ -472,7 +471,11 @@ int exec_multi_cmds(ExecCommand cmd_spec)
         waitpid(pids[i], &status, 0);
         int ret = WEXITSTATUS(status);
         if (ret != 0)
+        {
+            // fprintf(stderr, "[redo]sub cmd %s exec exit with error code %d\n", cmd_spec.cmds[i]->command, ret);
             return ret;
+        }
+            
     }
     return 0;
 }
@@ -507,11 +510,11 @@ int main(int argc, char *argv[])
         long cmd_round = 0;
         while (1)
         {
+            fprintf(stdout, "[redo]----------------round %ld-------------------\n", cmd_round);
             ret = exec_multi_cmds(cmd_spec);
-            if (cmd_spec.until_success == 1)
+            if (cmd_spec.until_success == 1 && ret == 0)
             {
-                if (ret == 0)
-                    break;
+                break;
             }
             else
             {
