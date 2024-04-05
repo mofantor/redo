@@ -81,7 +81,7 @@ long parse_time_with_units(const char *time_str)
     long raw_duration = strtol(time_str, &endptr, 10);
     if (errno != 0 || endptr == time_str)
     {
-        fprintf(stderr, "Invalid time format. Expected <number><unit> where unit is s/m/h\n");
+        fprintf(stderr, "[redo]Invalid time format. Expected <number><unit> where unit is s/m/h\n");
         exit(EXIT_FAILURE);
     }
     if (*endptr != unit)
@@ -101,7 +101,7 @@ long parse_time_with_units(const char *time_str)
         duration = raw_duration * 3600;
         break;
     default:
-        fprintf(stderr, "Invalid time unit. Only 's', 'm' and 'h' are supported.\n");
+        fprintf(stderr, "[redo]Invalid time unit. Only 's', 'm' and 'h' are supported.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -145,7 +145,7 @@ int parse_program_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
         ex_cmd->repeat_count = strtol(arg, &endptr, 10);
         if (errno != 0 || endptr == arg)
         {
-            fprintf(stderr, "Invalid time format. Expected <number><unit> where unit is s/m/h\n");
+            fprintf(stderr, "[redo]Invalid time format. Expected <number><unit> where unit is s/m/h\n");
             exit(EXIT_FAILURE);
         }
         *cur_want = 0;
@@ -176,7 +176,7 @@ int parse_cmd_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
         }
         else
         {
-            fprintf(stderr, "Too many command arguments.\n");
+            fprintf(stderr, "[redo]Too many command arguments.\n");
             exit(EXIT_FAILURE);
         }
         return 1;
@@ -345,7 +345,7 @@ ExecCommand parse_args(int argc, char *argv[])
 
 void handle_timeout(int signum)
 {
-    fprintf(stderr, "Command timed out\n");
+    fprintf(stderr, "[redo]Command timed out\n");
     exit(EXIT_FAILURE);
 }
 
@@ -373,7 +373,7 @@ int input_cmd(char *cmd_strs[], int *cmd_strs_len)
             cur_arg = (char *)malloc(sizeof(char) * (wind_end - wind_start + 1));
             if (cur_arg == NULL)
             {
-                perror("cannot malloc men for store args\n");
+                perror("[redo]cannot malloc men for store args\n");
                 return 0;
             }
             memcpy(cur_arg, input_cmd + wind_start, (wind_end - wind_start));
@@ -400,7 +400,7 @@ int exec_multi_cmds(ExecCommand cmd_spec)
 {
     if (cmd_spec.cmd_count == 0 && cmd_spec.cmds[0]->command == NULL)
     {
-        printf("input cmd should at least  1\n");
+        printf("[redo]input cmd should at least  1\n");
         return -1;
     }
 
@@ -417,13 +417,13 @@ int exec_multi_cmds(ExecCommand cmd_spec)
     {
         if (pipe(fds) == -1)
         {
-            perror("pipe create error");
+            perror("[redo]pipe create error");
             return errno;
         }
         int ret = fork();
         if (ret < 0)
         {
-            perror("fork error");
+            perror("[redo]fork error");
             return errno;
         }
         else if (ret == 0) // child
@@ -450,7 +450,7 @@ int exec_multi_cmds(ExecCommand cmd_spec)
             }
             if (execvp(cmd_spec.cmds[i]->command, cmd_spec.cmds[i]->args) == -1)
             {
-                fprintf(stderr, "pipe: %s: %s\n", cmd_spec.cmds[i]->command, strerror(errno));
+                fprintf(stderr, "[redo]exec cmd :'%s' failed,  %s\n", cmd_spec.cmds[i]->command, strerror(errno));
                 return errno;
             }
             return 0;
