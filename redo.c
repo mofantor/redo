@@ -13,6 +13,7 @@ Redo: A Command-Line Utility for Repeating Executions
 #define MAX_COMMAND_ARGS 32
 #define MAX_COMMAND_ARG_LEN 20
 #define DEFAULT_TIMEOUT 0
+#define DEFAULT_INTERVAL 0
 #define DEFAULT_REPEAT 1
 #define MAX_SUBSTRINGS 32
 
@@ -31,6 +32,7 @@ typedef struct
     Command **cmds;
     int cmd_count;
     int repeat_count;
+    long interval_secs;
     long timeout_secs;
     int until_success;
 } ExecCommand;
@@ -56,6 +58,12 @@ void print_help()
             "\n"
             "                    Example: -e 10s or -e 5m or -e 1h"
             "\n"
+            "  -g               : Set a interval for each command execution in seconds ."
+            "\n"
+            "                    Optionally, append 's', 'm', or 'h' for seconds, minutes, or hours."
+            "\n"
+            "                    Example: -g 10 or -g 5m or -g 1h"
+            "\n"            
             "  -r, --repeat N  : Repeat the command N times."
             "\n"
             "  -u              : Repeat the command until it succeeds (exit code 0)."
@@ -136,6 +144,9 @@ int parse_program_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
         {
             *cur_want = 2;
         }
+        else if (strcmp(arg, "-g") == 0 ) {
+            *cur_want = 3;
+        }
         else
         {
             return 0;
@@ -158,6 +169,11 @@ int parse_program_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
         }
         *cur_want = 0;
     }
+    else if (*cur_want == 3) 
+    {
+        ex_cmd->interval_secs = parse_time_with_units(arg);
+        *cur_want = 0;
+    }
     else
     {
         return 0;
@@ -165,7 +181,7 @@ int parse_program_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
     return 1;
 }
 
-int parse_cmd_arg(char *arg, ExecCommand *ex_cmd, int *cur_want)
+int parse_cmd_arg(char *arg, ExecCommand *ex_cmd)
 {
     Command *cur_cmd;
     cur_cmd = ex_cmd->cmds[ex_cmd->cmd_count];
@@ -283,7 +299,7 @@ char **get_argv_by_split(const char *input)
 
 ExecCommand parse_args(int argc, char *argv[])
 {
-    ExecCommand ex_cmd = {.repeat_count = DEFAULT_REPEAT, .timeout_secs = DEFAULT_TIMEOUT, .cmd_count = 0};
+    ExecCommand ex_cmd = {.repeat_count = DEFAULT_REPEAT, .timeout_secs = DEFAULT_TIMEOUT, .cmd_count = 0, .interval_secs=DEFAULT_INTERVAL};
     Command *cur_cmd;
     char **all_argv, **t_argv;
     int want_next = 0;
@@ -345,7 +361,7 @@ ExecCommand parse_args(int argc, char *argv[])
                 continue;
             }
             // TODO if not get
-            parse_cmd_arg(all_argv[i], &ex_cmd, &want_next);
+            parse_cmd_arg(all_argv[i], &ex_cmd);
         }
     }
     return ex_cmd;
@@ -531,6 +547,11 @@ int main(int argc, char *argv[])
                 {
                     break;
                 }
+            }
+            if (cmd_spec.interval_secs > 0)
+            {
+                fprintf(stdout, "[redo]sleep %ld seconds\n", cmd_spec.interval_secs);
+                sleep(cmd_spec.interval_secs);
             }
         }
     }
